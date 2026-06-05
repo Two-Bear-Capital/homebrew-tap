@@ -2,9 +2,7 @@
 
 Homebrew tap for **`tbc`**, Two Bear Capital's platform CLI.
 
-> **Internal tooling.** Anyone can install `tbc`, but every command requires a
-> **`@twobearcapital.com` Google Workspace account** and is rejected otherwise. This
-> repository is public only so that installation needs no GitHub token.
+> **Internal only.** Two Bear Capital tooling; external access is rejected.
 
 ## Install
 
