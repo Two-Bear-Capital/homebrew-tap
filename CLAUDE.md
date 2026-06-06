@@ -13,8 +13,14 @@ just points Homebrew at released CLI artifacts produced by tbc-platform.
 
 ## Conventions
 
-- Formula bumps (version + bottle/asset URLs + sha256) are typically driven by
-  tbc-platform's release process — prefer updating via that flow rather than
-  hand-editing formulae.
+Platform-wide conventions live once in the workspace `conventions/` catalog (the
+single source of truth). A tap has no build/test stack, so this repo imports only
+the universal core:
+
+@../conventions/core.md
+
+### Deviations
+- Formula bumps (version + bottle/asset URLs + sha256) are driven by
+  tbc-platform's release process — prefer that flow over hand-editing formulae.
 - Keep changes minimal and mechanical; this repo carries no build/test stack of
   its own.
