@@ -1,22 +1,48 @@
-# Two Bear Capital — Homebrew Tap
+# homebrew-tap
 
-Homebrew tap for **`tbc`**, Two Bear Capital's platform CLI.
+![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040)
+![CLI](https://img.shields.io/badge/distributes-tbc%20CLI-1d76db)
+![status](https://img.shields.io/badge/access-internal-orange)
 
-> **Internal only.** Two Bear Capital tooling; external access is rejected.
+Homebrew tap that distributes **`tbc`**, the Two Bear Capital platform CLI.
 
-## Install
+> **Internal only.** Requires a `twobearcapital.com` account; external access is
+> rejected.
 
-Requires [Homebrew](https://brew.sh) on macOS.
+## Part of the Two Bear Capital platform
+
+The distribution channel for the `tbc` CLI built in
+[`tbc-platform`](https://github.com/Two-Bear-Capital/tbc-platform). Its release
+process (GoReleaser) publishes the binaries and updates the formulae here; users
+`brew install` from this tap.
+
+```mermaid
+flowchart LR
+    Platform[tbc-platform release] -->|publishes| Tap[homebrew-tap]
+    Tap -->|brew install| Dev[developer machines]
+```
+
+## What it does
+
+Holds the Homebrew formula/cask definitions (`Formula/`) pointing at released
+`tbc` CLI artifacts. No application code.
+
+## Quick start
+
+Requires [Homebrew](https://brew.sh) on macOS:
 
 ```sh
 brew install two-bear-capital/tap/tbc
 tbc auth login
+brew upgrade two-bear-capital/tap/tbc   # later
 ```
 
-Upgrade later with `brew upgrade two-bear-capital/tap/tbc`.
+## Documentation
 
-The cask and binaries here are published automatically by CI — please don't hand-edit them.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how formulae are updated
+- [CLAUDE.md](CLAUDE.md) — guidance for Claude Code
+- The CLI itself: [`tbc-platform`](https://github.com/Two-Bear-Capital/tbc-platform)
 
----
+## License
 
-© Two Bear Capital. Internal tooling — not licensed for external use.
+Internal — © Two Bear Capital. All rights reserved.
