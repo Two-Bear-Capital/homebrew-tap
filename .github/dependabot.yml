@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # GitHub Actions used by the tap's workflows. (No package manifests to track —
+  # the tap distributes the tbc CLI via Homebrew formulae, not a build.)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
