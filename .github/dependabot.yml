@@ -4,6 +4,9 @@ updates:
   # the tap distributes the tbc CLI via Homebrew formulae, not a build.)
   - package-ecosystem: "github-actions"
     directory: "/"
+    labels:
+      - "dependencies"
+      - "github-actions"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
