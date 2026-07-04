@@ -1,0 +1,117 @@
+# Canonical automated Claude PR review. THIS repo-level copy is generated —
+# do NOT hand-edit it (a drifted copy is a review finding). The single source
+# lives in the tbc-platform-workspace meta-repo at workflows/claude-code-review.yml;
+# edit it there and re-run `make workflows` to roll the change out everywhere.
+#
+# This runs Claude in non-interactive review mode on every PR (no @claude
+# mention needed) and reviews the diff against the Two Bear conventions
+# catalog, which is sparse-checked-out from the private workspace repo so the
+# review sees the SAME single-source rules the repos import — no duplication.
+#
+# Secrets (both org-level; provisioned from 1Password by the workspace's
+# provision-review-secrets.sh / `make review-secrets`):
+#   CLAUDE_CODE_OAUTH_TOKEN — auth for the Claude Code action.
+#   WORKSPACE_RO_TOKEN      — read-only token with access to the private
+#                             tbc-platform-workspace repo (the default
+#                             GITHUB_TOKEN cannot check out a sibling repo).
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# One in-flight review per PR; a new push cancels the prior run.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Skip bot PRs (Dependabot non-major updates auto-merge and aren't gated on
+    # review), and skip fork PRs: a fork can't see the org secrets, so the action
+    # would fail to authenticate and just spew red checks. Same-repo PRs only.
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read # Claude reads CI results on the PR
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # Degrade gracefully: if WORKSPACE_RO_TOKEN is absent/expired the review
+      # still runs against the repo's own CLAUDE.md rather than failing every PR.
+      - name: Checkout conventions catalog
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          repository: Two-Bear-Capital/tbc-platform-workspace
+          token: ${{ secrets.WORKSPACE_RO_TOKEN }}
+          sparse-checkout: conventions/
+          sparse-checkout-cone-mode: false
+          path: .workspace
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          # Surface the review ON the PR (like Copilot), not just in the Actions
+          # log: track_progress posts a live tracking comment with the summary,
+          # and the create_inline_comment tool (allow-listed below) posts
+          # per-line findings. Without these the review runs but stays invisible.
+          track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            You are the automated reviewer for a Two Bear Capital repository.
+            Review this pull request against the Two Bear engineering
+            conventions AND this repo's own CLAUDE.md.
+
+            The canonical conventions catalog is checked out at
+            `.workspace/conventions/` — or, when THIS repo is the workspace
+            meta-repo itself, at `conventions/` in the repo root. Read the rules
+            that apply to this repo's stack before reviewing — do not assume;
+            open the files from whichever path exists. Only if NEITHER path is
+            present (token lapsed on a non-workspace repo) fall back to this
+            repo's own CLAUDE.md and general best practice, and note that
+            conventions were unavailable. Key files when present:
+              - dry-and-reuse.md      — new duplication is a BLOCKING finding;
+                                        shared logic belongs in its single home
+                                        (e.g. tbc-core), not copy-pasted.
+              - engineering-judgment.md
+              - commits-and-releases.md — the PR TITLE must be a valid
+                                        Conventional Commit subject (it becomes
+                                        the squash commit / release note).
+              - secrets-and-config.md — never committed secrets, never logged.
+              - testing.md            — changed logic ships with tests; ≥80%
+                                        coverage; a logic change without tests
+                                        is a finding.
+              - data-boundaries.md    — analytical reads via public_datamart
+                                        only; parameterized SQL; vendor creds
+                                        stay behind the core boundary.
+              - logging.md, python.md, make-hub.md, cli-contract.md — apply
+                                        where the repo's stack matches.
+
+            Focus your review, in priority order:
+              1. Correctness and security bugs in the diff.
+              2. Convention violations, especially DRY / duplication and
+                 missing tests for changed logic.
+              3. A non-Conventional-Commit PR title.
+              4. Concrete, actionable cleanups — cite the rule you're applying.
+
+            Be specific and cite file:line. Post each concrete finding as an
+            INLINE comment on the diff via the create_inline_comment tool; give
+            the overall verdict in the top-level summary. Do not restate
+            unchanged code or nitpick style the formatter owns. If the PR is
+            clean, say so briefly in the summary — do not invent findings.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
