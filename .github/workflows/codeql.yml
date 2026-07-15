@@ -1,0 +1,67 @@
+# CodeQL — ADVANCED setup (replaces GitHub "default setup").
+#
+# ⚠️ PREREQUISITE before merging: disable CodeQL *default setup* for this repo
+# (Settings → Code security → CodeQL analysis → switch to Advanced), otherwise the
+# analysis errors with "default setup is enabled". Default and advanced setup
+# cannot both be active.
+#
+# Why advanced setup: default setup CANNOT be path-filtered. This scans code PRs,
+# push-to-main, and weekly — but skips docs-only PRs. CodeQL is intentionally NOT a
+# required status check, so the pull_request paths-ignore is safe. See the
+# ci-performance convention in the workspace conventions/ catalog. Language set
+# matches default setup: actions, ruby.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+  schedule:
+    - cron: "0 10 * * 1" # Mondays 10:00 UTC
+
+# Cancel superseded in-flight PR runs; never cancel a push-to-main/scheduled run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: ruby
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
