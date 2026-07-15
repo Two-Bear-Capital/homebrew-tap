@@ -34,6 +34,7 @@ jobs:
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # LLM review is bounded; cap true hangs
     permissions:
       contents: read
       pull-requests: write
@@ -41,7 +42,7 @@ jobs:
       actions: read # Claude reads CI results on the PR
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
 
@@ -49,7 +50,7 @@ jobs:
       # still runs against the repo's own CLAUDE.md rather than failing every PR.
       - name: Checkout conventions catalog
         continue-on-error: true
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Two-Bear-Capital/tbc-platform-workspace
           token: ${{ secrets.WORKSPACE_RO_TOKEN }}
@@ -58,7 +59,7 @@ jobs:
           path: .workspace
 
       - name: Run Claude Code Review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@12531344451323133b0493233c759991ac61da12 # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
