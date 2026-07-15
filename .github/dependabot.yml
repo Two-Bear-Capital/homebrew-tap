@@ -9,4 +9,9 @@ updates:
       - "github-actions"
     schedule:
       interval: "weekly"
+    groups:
+      all-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
     open-pull-requests-limit: 5
