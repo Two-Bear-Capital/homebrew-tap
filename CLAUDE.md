@@ -5,9 +5,15 @@
 `tbc-platform-workspace` meta-repo's root `CLAUDE.md` (it loads automatically
 when you run Claude from inside the workspace).
 
+> **Governing source of truth → the workspace [`docs/`](https://github.com/Two-Bear-Capital/tbc-platform-workspace/blob/main/docs/README.md).** How this tap
+> fits the platform is [`docs/system-overview.md`](https://github.com/Two-Bear-Capital/tbc-platform-workspace/blob/main/docs/system-overview.md); the release
+> flow that populates it is [`docs/runbooks/release-and-deploy.md`](https://github.com/Two-Bear-Capital/tbc-platform-workspace/blob/main/docs/runbooks/release-and-deploy.md)
+> (tbc-platform's GoReleaser, on a `v*` tag). This file covers only what's
+> specific to `homebrew-tap`.
+
 ## What this is
 
-A Homebrew tap — a Git repo of formula definitions (`Formula/*.rb`) that lets
+A Homebrew tap — a Git repo of cask definitions (`Casks/*.rb`) that lets
 users `brew install` the `tbc` CLI. There is no application code here; the tap
 just points Homebrew at released CLI artifacts produced by tbc-platform.
 
