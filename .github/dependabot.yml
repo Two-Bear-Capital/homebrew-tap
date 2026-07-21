@@ -10,6 +10,20 @@ updates:
     schedule:
       interval: "weekly"
     groups:
+      # Keep every github/codeql-action/* step (init, analyze, …) in ONE PR
+      # across all semver levels — majors included. As separate PRs, a major
+      # bump (e.g. v3 → v4) lands on each step at a different time and leaves the
+      # CodeQL workflow with mismatched action versions mid-merge ("Loaded a
+      # configuration file for version X, but running version Y" → CodeQL
+      # fails). Grouped, init and analyze always move together. Listed first so
+      # it wins over all-minor-patch (Dependabot uses the first matching group).
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
+        update-types:
+          - "minor"
+          - "patch"
+          - "major"
       all-minor-patch:
         update-types:
           - "minor"
