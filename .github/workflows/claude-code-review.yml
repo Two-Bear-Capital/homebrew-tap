@@ -1,6 +1,6 @@
 # Canonical automated Claude PR review. THIS repo-level copy is generated —
 # do NOT hand-edit it (a drifted copy is a review finding). The single source
-# lives in the tbc-platform-workspace meta-repo at workflows/claude-code-review.yml;
+# lives in the tbc-platform-workspace meta-repo at scripts/workflows/claude-code-review.yml;
 # edit it there and re-run `make workflows` to roll the change out everywhere.
 #
 # This runs Claude in non-interactive review mode on every PR (no @claude
@@ -9,7 +9,7 @@
 # review sees the SAME single-source rules the repos import — no duplication.
 #
 # Secrets (both org-level; provisioned from 1Password by the workspace's
-# provision-review-secrets.sh / `make review-secrets`):
+# scripts/provision-review-secrets.sh / `make review-secrets`):
 #   CLAUDE_CODE_OAUTH_TOKEN — auth for the Claude Code action.
 #   WORKSPACE_RO_TOKEN      — read-only token with access to the private
 #                             tbc-platform-workspace repo (the default
