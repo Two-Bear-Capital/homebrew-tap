@@ -20,12 +20,21 @@
 # `gh pr review --approve` step would fail and abort the job before auto-merge
 # is ever enabled. Enabling auto-merge needs only `pull-requests: write`.
 #
+# A second, scheduled job (`rebase-stale`) sweeps daily for Dependabot PRs that
+# rotted on a stale base — a failed `ci` bound to a head SHA nothing will touch
+# again. It does NOT inspect auto-merge state. See the comment on that job for the
+# exact selection criteria, why Dependabot does not self-heal this, and why the
+# sweep cannot loop.
+#
 # Uses the default GITHUB_TOKEN: the permissions block below grants it write, so
 # no personal access token (PAT) is needed.
 name: Dependabot auto-merge
 
 on:
   pull_request:
+  schedule:
+    - cron: "17 6 * * *" # daily un-stall sweep (see the rebase-stale job)
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -34,7 +43,7 @@ permissions:
 jobs:
   auto-merge:
     name: Auto-merge Dependabot PRs
-    if: github.actor == 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 10 # only gh CLI calls
     steps:
@@ -59,3 +68,25 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Un-stall Dependabot PRs that rotted on a stale base — a failed `ci` pinned to a
+  # head SHA nothing will touch again. Selection is exactly: Dependabot-authored +
+  # open + base behind the default branch + `ci` failed + not already nudged since
+  # the current head. It does NOT check whether auto-merge is enabled — that's the
+  # typical case, not a requirement; the rebase is worth requesting either way.
+  # The why, the loop-safety argument, and the cases deliberately left alone are
+  # documented in the script; this job is just the trigger and the token.
+  rebase-stale:
+    name: Rebase stale Dependabot PRs
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # only gh CLI calls
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Request a rebase on stale-base PRs with a failed ci
+        run: bash .github/scripts/dependabot-rebase-stale.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
