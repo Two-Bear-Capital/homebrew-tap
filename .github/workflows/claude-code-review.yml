@@ -19,6 +19,31 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    # Don't spend an LLM review on a diff with nothing reviewable in it: pure
+    # lockfile bumps and generated output. `paths-ignore` skips the run only when
+    # EVERY changed file matches, so a PR touching a lockfile *and* real code is
+    # still reviewed in full.
+    #
+    # A top-level paths-ignore is safe HERE — and only here — because this
+    # workflow's check is not a branch-protection required context in any repo
+    # (verified across all 14; the required contexts are `ci`, or the
+    # lint/test/security trio). On ci.yml the same block would deadlock: the
+    # required check would never report and the PR would hang on "Expected —
+    # waiting for status". See the ci-performance topic in the conventions
+    # catalog, which each repo imports from tbc-platform-workspace (checked out
+    # to .workspace/conventions/ by the job below). If this workflow's check is
+    # ever made required, delete this block.
+    paths-ignore:
+      - "**/package-lock.json"
+      - "**/pnpm-lock.yaml"
+      - "**/yarn.lock"
+      - "**/uv.lock"
+      - "**/poetry.lock"
+      - "**/go.sum"
+      - "**/Cargo.lock"
+      - "**/.terraform.lock.hcl"
+      - "**/*.gen.go"
+      - "**/generated/**"
 
 # One in-flight review per PR; a new push cancels the prior run.
 concurrency:
