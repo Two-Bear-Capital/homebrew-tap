@@ -75,11 +75,11 @@ while IFS=$'\t' read -r num base_oid; do
 	fi
 
 	# Match on OUTCOME, never on a check NAMED `ci`. Required contexts differ per
-	# repo — tbc-platform uses `ci`, tbc-mcp-server uses security/test/validate-config,
-	# tbc-api uses test/lint/security — so matching a name makes this sweep a silent
-	# no-op wherever the naming differs. Reading the real required-context list needs
-	# admin, which the workflow's GITHUB_TOKEN does not have, so ANY failing check
-	# counts. Over-triggering is bounded by guard 2 below.
+	# repo — tbc-platform requires `ci`; tbc-mcp-server requires `security` and
+	# `test`; tbc-api requires `test`, `lint` and `security` — so matching a name
+	# makes this sweep a silent no-op wherever the naming differs. Reading the real
+	# required-context list needs admin, which the workflow's GITHUB_TOKEN does not
+	# have, so ANY failing check counts. Over-triggering is bounded by guard 2 below.
 	#
 	# `gh pr checks` exits non-zero when checks are failing — the very case we care
 	# about — so never let its status abort the loop under `set -e`.
