@@ -71,18 +71,20 @@ jobs:
       id-token: write
       actions: read # Claude reads CI results on the PR
     steps:
-      # persist-credentials: false on BOTH checkouts. actions/checkout otherwise
-      # writes its token into .git/config as an extraheader, and the review step
-      # below runs over UNTRUSTED PR content with unrestricted `Read` plus
-      # `Bash(gh pr comment:*)` — a prompt injection in a PR could read the
-      # config and publish the token as a comment. Nothing here runs git after
-      # the fetch, so dropping the credential costs nothing. It matters most on
-      # the second checkout, whose token reaches the private workspace repo.
+      # This checkout KEEPS its persisted credential, deliberately. The action
+      # runs `git fetch origin --depth=N <branch>` against this working tree
+      # (claude-code-action src/github/operations/branch.ts) BEFORE it rewrites
+      # origin with its own token, so removing the credential makes that fetch
+      # unauthenticated and it fails with exit 128 on a private repo.
+      #
+      # Dropping it here bought nothing anyway: the action already strips this
+      # credential itself once it no longer needs it — from the local config and
+      # from every include.path file, which is what actions/checkout v6+ needs
+      # (src/github/operations/git-config.ts, replaceCheckoutCredentials).
       - name: Checkout PR
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
-          persist-credentials: false
 
       # Degrade gracefully: if WORKSPACE_RO_TOKEN is absent/expired the review
       # still runs against the repo's own CLAUDE.md rather than failing every PR.
@@ -95,6 +97,16 @@ jobs:
           sparse-checkout: conventions/
           sparse-checkout-cone-mode: false
           path: .workspace
+          # THIS is the one that matters, and it stays. actions/checkout would
+          # otherwise leave WORKSPACE_RO_TOKEN — which reaches the PRIVATE
+          # workspace repo — in .workspace/.git/config, where the review step
+          # can read it: that step runs over untrusted PR content with
+          # unrestricted `Read` and `Bash(gh pr comment:*)`.
+          #
+          # The action's own credential cleanup does NOT cover this: it runs
+          # `git config` against the working directory only, so it never touches
+          # .workspace/.git/config. Nothing ever fetches from this checkout
+          # either, so unlike the one above it costs nothing to drop.
           persist-credentials: false
 
       - name: Run Claude Code Review
