@@ -55,8 +55,13 @@ jobs:
     # Skip bot PRs (Dependabot non-major updates auto-merge and aren't gated on
     # review), and skip fork PRs: a fork can't see the org secrets, so the action
     # would fail to authenticate and just spew red checks. Same-repo PRs only.
+    #
+    # Filter the PR AUTHOR, not github.actor: the actor is whoever triggered THIS
+    # event, so a maintainer reopening or pushing to a Dependabot PR makes the
+    # actor a human and the skip misses. user.login is stable across every event
+    # on the PR.
     if: >-
-      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20 # LLM review is bounded; cap true hangs
@@ -66,6 +71,16 @@ jobs:
       id-token: write
       actions: read # Claude reads CI results on the PR
     steps:
+      # This checkout KEEPS its persisted credential, deliberately. The action
+      # runs `git fetch origin --depth=N <branch>` against this working tree
+      # (claude-code-action src/github/operations/branch.ts) BEFORE it rewrites
+      # origin with its own token, so removing the credential makes that fetch
+      # unauthenticated and it fails with exit 128 on a private repo.
+      #
+      # Dropping it here bought nothing anyway: the action already strips this
+      # credential itself once it no longer needs it — from the local config and
+      # from every include.path file, which is what actions/checkout v6+ needs
+      # (src/github/operations/git-config.ts, replaceCheckoutCredentials).
       - name: Checkout PR
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,9 +97,20 @@ jobs:
           sparse-checkout: conventions/
           sparse-checkout-cone-mode: false
           path: .workspace
+          # THIS is the one that matters, and it stays. actions/checkout would
+          # otherwise leave WORKSPACE_RO_TOKEN — which reaches the PRIVATE
+          # workspace repo — in .workspace/.git/config, where the review step
+          # can read it: that step runs over untrusted PR content with
+          # unrestricted `Read` and `Bash(gh pr comment:*)`.
+          #
+          # The action's own credential cleanup does NOT cover this: it runs
+          # `git config` against the working directory only, so it never touches
+          # .workspace/.git/config. Nothing ever fetches from this checkout
+          # either, so unlike the one above it costs nothing to drop.
+          persist-credentials: false
 
       - name: Run Claude Code Review
-        uses: anthropics/claude-code-action@0a8d3c9443bbff909ab973b6a17a340b913f229f # v1
+        uses: anthropics/claude-code-action@56cf60fde42f7b19c3abfd5c9c48b69a1288461f # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
