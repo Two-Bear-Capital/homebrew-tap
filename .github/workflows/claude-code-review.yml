@@ -55,8 +55,13 @@ jobs:
     # Skip bot PRs (Dependabot non-major updates auto-merge and aren't gated on
     # review), and skip fork PRs: a fork can't see the org secrets, so the action
     # would fail to authenticate and just spew red checks. Same-repo PRs only.
+    #
+    # Filter the PR AUTHOR, not github.actor: the actor is whoever triggered THIS
+    # event, so a maintainer reopening or pushing to a Dependabot PR makes the
+    # actor a human and the skip misses. user.login is stable across every event
+    # on the PR.
     if: >-
-      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20 # LLM review is bounded; cap true hangs
@@ -66,10 +71,18 @@ jobs:
       id-token: write
       actions: read # Claude reads CI results on the PR
     steps:
+      # persist-credentials: false on BOTH checkouts. actions/checkout otherwise
+      # writes its token into .git/config as an extraheader, and the review step
+      # below runs over UNTRUSTED PR content with unrestricted `Read` plus
+      # `Bash(gh pr comment:*)` — a prompt injection in a PR could read the
+      # config and publish the token as a comment. Nothing here runs git after
+      # the fetch, so dropping the credential costs nothing. It matters most on
+      # the second checkout, whose token reaches the private workspace repo.
       - name: Checkout PR
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          persist-credentials: false
 
       # Degrade gracefully: if WORKSPACE_RO_TOKEN is absent/expired the review
       # still runs against the repo's own CLAUDE.md rather than failing every PR.
@@ -82,9 +95,10 @@ jobs:
           sparse-checkout: conventions/
           sparse-checkout-cone-mode: false
           path: .workspace
+          persist-credentials: false
 
       - name: Run Claude Code Review
-        uses: anthropics/claude-code-action@0a8d3c9443bbff909ab973b6a17a340b913f229f # v1
+        uses: anthropics/claude-code-action@56cf60fde42f7b19c3abfd5c9c48b69a1288461f # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
