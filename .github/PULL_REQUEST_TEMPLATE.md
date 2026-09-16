@@ -11,3 +11,5 @@ body becomes the commit body, so trim anything that isn't worth keeping in histo
 - [ ] Tests added/updated (or why not)
 - [ ] Copilot review threads resolved
 - [ ] Docs updated if needed
+
+<!-- STALE -->
