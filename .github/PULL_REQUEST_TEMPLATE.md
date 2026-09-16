@@ -12,4 +12,4 @@ body becomes the commit body, so trim anything that isn't worth keeping in histo
 - [ ] Copilot review threads resolved
 - [ ] Docs updated if needed
 
-<!-- sync-engine test marker v1 -->
+<!-- sync-engine test marker v2 -->
