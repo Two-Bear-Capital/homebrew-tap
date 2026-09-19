@@ -18,7 +18,22 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # ONE complete review per PR, plus an explicit re-request — NOT one per push.
+    #
+    # `synchronize` was removed deliberately and the measurement is the reason: across
+    # 30 days, on the PRs that went multiple rounds, 60 of Claude's 131 findings arrived
+    # AFTER round one, and 68% of those landed on a file round one had already commented
+    # on. That is not new code being caught; it is the same diff re-read, dribbling
+    # findings out one round at a time while the author waits. Copilot already reviews
+    # once on 87% of PRs and the sky does not fall.
+    #
+    # To get another pass — a substantial rewrite, a fix you want a second opinion on —
+    # add the `re-review` label (remove and re-add it to run again), or comment @claude,
+    # which claude.yml handles. Both are deliberate acts, which is the point.
+    #
+    # If defects start reaching main that a second pass would have caught, put
+    # `synchronize` back: that is the first thing to reverse.
+    types: [opened, reopened, labeled]
     # Don't spend an LLM review on a diff with nothing reviewable in it: pure
     # lockfile bumps and generated output. `paths-ignore` skips the run only when
     # EVERY changed file matches, so a PR touching a lockfile *and* real code is
@@ -60,9 +75,13 @@ jobs:
     # event, so a maintainer reopening or pushing to a Dependabot PR makes the
     # actor a human and the skip misses. user.login is stable across every event
     # on the PR.
+    #
+    # The `labeled` clause: that event fires for EVERY label, so without this a routine
+    # `bug` or `dependencies` label would spend a full LLM review. Only `re-review` does.
     if: >-
       github.event.pull_request.user.login != 'dependabot[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action != 'labeled' || github.event.label.name == 're-review')
     runs-on: ubuntu-latest
     timeout-minutes: 20 # LLM review is bounded; cap true hangs
     permissions:
@@ -109,6 +128,34 @@ jobs:
           # either, so unlike the one above it costs nothing to drop.
           persist-credentials: false
 
+      # Graceful degradation must be LOUD. The checkout above is continue-on-error so a
+      # dead token cannot red every PR in the org — that trade is right and stays. But
+      # for a month or more (workspace#153) WORKSPACE_RO_TOKEN was over the enterprise's
+      # 366-day PAT cap, the checkout failed on EVERY run, and every automated review in
+      # the org judged PRs without the conventions catalog. Nobody noticed, because a
+      # degraded run looked exactly like a healthy one on the run page.
+      #
+      # The replacement PAT is capped at 366 days by the same rule, so this recurs on a
+      # timer. `make ci-audit` probes for it across repos; this step makes the single run
+      # say so out loud.
+      - name: Check the conventions catalog arrived
+        if: always()
+        run: |
+          if [ -n "$(ls -A .workspace/conventions 2>/dev/null)" ] || [ -d conventions ]; then
+            echo "Conventions catalog available." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::warning title=Degraded review::Conventions catalog unavailable — reviewing against this repo's CLAUDE.md only. Check WORKSPACE_RO_TOKEN (see tbc-platform-workspace#153)."
+          {
+            echo "### ⚠️ Degraded review"
+            echo
+            echo "\`.workspace/conventions/\` is empty and there is no \`conventions/\` at the repo root,"
+            echo "so this review ran against the repo's own \`CLAUDE.md\` and general best practice —"
+            echo "**not** the shared conventions catalog."
+            echo
+            echo "Most likely \`WORKSPACE_RO_TOKEN\` has expired. See [workspace#153](https://github.com/Two-Bear-Capital/tbc-platform-workspace/issues/153)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@9cdae7f0d995e3ba7c33f226087fdf82a59cd520 # v1
         with:
@@ -153,6 +200,37 @@ jobs:
               - logging.md, python.md, make-hub.md, cli-contract.md — apply
                                         where the repo's stack matches.
 
+            TAG EVERY FINDING `BLOCKING:` OR `ADVISORY:` — the first word of the
+            finding. The tag decides whether the PR can merge, so it is part of
+            the finding, not decoration.
+
+              * BLOCKING — wrong behaviour, a security hole, a secret or PII
+                crossing into a wider trust domain, a data-layer boundary
+                violation, changed logic shipped with no test, or new
+                duplication of logic that already has a single home.
+              * ADVISORY — everything else: stale prose, naming, structure, a
+                cleanup worth doing later.
+
+            Only blocking threads gate the merge. Advisory findings are NOT
+            discarded — every unresolved one is filed automatically as a tracked
+            issue when the PR merges. So file an advisory finding freely rather
+            than inflating it to blocking to be sure it survives. Judge by
+            consequence, not by your confidence: "this might be wrong and if it
+            is, the write silently corrupts a record" is blocking; "this name
+            could be clearer" is advisory however certain you are.
+
+            REPORT THE DEFECT CLASS, NOT EACH INSTANCE. Before you report a
+            defect, sweep for every other instance of the same class — the rest
+            of the file, the sibling files, the repo — and report them as ONE
+            finding listing every site. If the defect is a design flaw whose
+            symptoms will recur, say so and name the CLASS-LEVEL fix rather than
+            only the local patch.
+
+            `engineering-judgment.md` in the catalog — which you are reading
+            anyway — holds the canonical statement of this rule, what it was
+            measured to cost, and the worked examples. Read it there; it is
+            deliberately not restated here.
+
             Focus your review, in priority order:
               1. Correctness and security bugs in the diff.
               2. Convention violations, especially DRY / duplication and
@@ -163,9 +241,7 @@ jobs:
               5. Prose accuracy, under the budget below.
 
             SPEND THE BUDGET ON CODE. These repos comment heavily by design, so
-            prose is often most of a diff — and review effort has historically
-            drained into it, round after round, on PRs that changed no
-            behaviour at all. Three limits keep it proportionate:
+            prose is often most of a diff. Two limits keep it proportionate:
 
               * Flag a comment or doc ONLY when the code contradicts it — a
                 stale reference, or a claim about behaviour the diff itself (or
@@ -178,8 +254,14 @@ jobs:
                 — filed once, not once per site. Filing per site turns one
                 structural problem into many rounds of the same conversation,
                 and fixing the instance does not prevent the next one.
-              * At most 3 prose findings per review. If there are more, say so
-                in the summary and name the pattern rather than enumerating.
+
+            There is deliberately NO numeric cap on prose findings. One was
+            tried and removed on evidence: across 248 findings classified over
+            30 days, pure wording/tone/phrasing was ONE finding, while 48 were
+            comments the code actually contradicted — real defects, nearly all
+            fixed. A cap suppresses the second group to solve the first, and the
+            first is not happening. The "only when the code contradicts it" rule
+            above is what keeps this cheap; a count is not.
 
             The authoring half of this is `comments-and-docs.md` in the
             catalog — at whichever of the two paths above exists — and its rule
@@ -191,5 +273,12 @@ jobs:
             the overall verdict in the top-level summary. Do not restate
             unchanged code or nitpick style the formatter owns. If the PR is
             clean, say so briefly in the summary — do not invent findings.
+
+            END THE SUMMARY WITH THE COMMIT YOU REVIEWED:
+            "Reviewed ${{ github.event.pull_request.head.sha }}."
+            Reviews and fixes cross in flight here, and when they do the author
+            cannot tell a stale finding from a live one and re-fixes something
+            already fixed. Naming the SHA makes that visible instead of
+            guessable.
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
