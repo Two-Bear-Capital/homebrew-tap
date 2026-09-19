@@ -20,6 +20,17 @@ jobs:
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
+      # This checkout KEEPS its persisted credential, deliberately — do NOT add
+      # `persist-credentials: false` here as a hardening pass. claude-code-action runs
+      # `git fetch origin --depth=N <branch>` against this working tree BEFORE it rewrites
+      # origin with its own token, so dropping the credential makes that fetch
+      # unauthenticated and it dies with exit 128 on a private repo. That was tried
+      # (workspace#147) and disproven by the PR's own failing job.
+      #
+      # It also buys nothing: the action strips this credential itself once it no longer
+      # needs it (src/github/operations/git-config.ts, replaceCheckoutCredentials). The
+      # credential worth dropping is a SECOND checkout carrying a cross-repo token — see
+      # the .workspace checkout in claude-code-review.yml, which nothing fetches from.
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
