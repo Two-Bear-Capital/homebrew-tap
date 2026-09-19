@@ -156,9 +156,35 @@ jobs:
             Focus your review, in priority order:
               1. Correctness and security bugs in the diff.
               2. Convention violations, especially DRY / duplication and
-                 missing tests for changed logic.
+                 missing tests for changed logic — including a test whose NAME
+                 claims more than its assertions actually check.
               3. A non-Conventional-Commit PR title.
               4. Concrete, actionable cleanups — cite the rule you're applying.
+              5. Prose accuracy, under the budget below.
+
+            SPEND THE BUDGET ON CODE. These repos comment heavily by design, so
+            prose is often most of a diff — and review effort has historically
+            drained into it, round after round, on PRs that changed no
+            behaviour at all. Three limits keep it proportionate:
+
+              * Flag a comment or doc ONLY when the code contradicts it — a
+                stale reference, or a claim about behaviour the diff itself (or
+                the code it describes) makes false. Never flag wording, tone,
+                length or phrasing preference. If the statement is true, leave
+                it.
+              * Report restatement drift ONCE, STRUCTURALLY. When one fact is
+                stated in several places and one has gone stale, the finding is
+                "this fact is stated in N places; consolidate to one and link"
+                — filed once, not once per site. Filing per site turns one
+                structural problem into many rounds of the same conversation,
+                and fixing the instance does not prevent the next one.
+              * At most 3 prose findings per review. If there are more, say so
+                in the summary and name the pattern rather than enumerating.
+
+            The authoring half of this is `comments-and-docs.md` in the
+            catalog — at whichever of the two paths above exists — and its rule
+            is that a claim about runtime behaviour belongs in a TEST, not a
+            comment.
 
             Be specific and cite file:line. Post each concrete finding as an
             INLINE comment on the diff via the create_inline_comment tool; give
