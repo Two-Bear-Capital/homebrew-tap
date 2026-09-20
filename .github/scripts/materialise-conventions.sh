@@ -21,18 +21,24 @@
 #     every @claude invocation — but the degradation is LOUD (a ::warning:: and a step
 #     summary), because for a month nobody noticed the same failure in the review workflow
 #     (tbc-platform-workspace#153).
-#   * It deletes the `.workspace` scratch checkout afterwards. `../conventions` sits
-#     outside $GITHUB_WORKSPACE and so can never be committed, but `.workspace/` sits
-#     inside it and no repo gitignores it — and this workflow, unlike the review one, can
-#     commit and push. A session that ever staged broadly (`git add -A`) would sweep the
-#     private catalog into a public repo's history. Removing it closes that class rather
-#     than trusting every future session to stage precisely.
+#   * It deletes the `.workspace` scratch checkout afterwards — on EVERY way out, not just
+#     success: an EXIT trap, so the degraded path (catalog missing) and a failed copy clean
+#     up too. `../conventions` sits outside $GITHUB_WORKSPACE and so can never be
+#     committed, but `.workspace/` sits inside it and no repo gitignores it — and this
+#     workflow, unlike the review one, can commit and push. A session that ever staged
+#     broadly (`git add -A`) would sweep the private catalog into a public repo's history.
+#     Removing it closes that class rather than trusting every future session to stage
+#     precisely. The degraded path used to `exit 0` before the delete ran, so the property
+#     this comment states held only when the token had NOT lapsed.
 #
 # Usage: run from $GITHUB_WORKSPACE, after the repo and `.workspace` checkouts.
 set -euo pipefail
 
 SRC=".workspace/conventions"
 DEST="../conventions"
+
+# Registered first, before anything that can exit: see the header for why it must not survive.
+trap 'rm -rf .workspace' EXIT
 
 if [ -z "$(ls -A "$SRC" 2>/dev/null)" ]; then
 	echo "::warning title=Degraded session::Conventions catalog unavailable — @claude is running without the shared rules. Check WORKSPACE_RO_TOKEN (see tbc-platform-workspace#153)."
@@ -51,10 +57,6 @@ fi
 mkdir -p "$DEST"
 cp -R "$SRC"/. "$DEST"/
 count=$(find "$DEST" -name '*.md' | wc -l | tr -d ' ')
-
-# The scratch checkout has served its purpose; see the header for why it must not survive
-# into a session that can commit.
-rm -rf .workspace
 
 echo "Conventions catalog available to @claude ($count files)."
 echo "Conventions catalog available to @claude ($count files)." >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
