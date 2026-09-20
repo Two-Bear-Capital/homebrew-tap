@@ -18,8 +18,9 @@
 # finding. So this does not ask the author to remember at merge time — which is exactly
 # when the PR is green and they are done.
 #
-# What it collects: **every unresolved reviewer thread on the merged PR**, whatever its tier
-# and whenever it was posted. Tier and lateness are annotations in the issue, never admission
+# What it collects: **every unresolved thread an automated reviewer (Copilot or Claude) raised
+# on the merged PR**, whatever its tier and whenever it was posted. A thread a HUMAN started is
+# deliberately not collected — test-collect-review-followups.sh pins that. Tier and lateness are annotations in the issue, never admission
 # criteria — see the long note above the selection for the four separate times a predicate
 # silently ate a finding. A thread posted after mergedAt had no chance to gate anything, and a
 # thread tagged BLOCKING that is still open means the review gate was missed; both are called
@@ -110,7 +111,8 @@ pr_author=$(jq -r '.author.login // empty' <<<"$pr")
 # nothing carries it. Tier and lateness are still computed, but only to ANNOTATE the issue —
 # never to decide admission. A regex cannot lose a finding it does not gate.
 #
-# Admission is therefore: unresolved, and raised by a reviewer. The marker clause covers the
+# Admission is therefore: unresolved, and raised by an automated reviewer (the author test below:
+# Copilot or Claude — a human's thread is out of scope). The marker clause covers the
 # threads surface-suppressed-findings.sh posts under the workflow's GITHUB_TOKEN, which no
 # author test would match.
 findings=$(jq -r --arg merged "$merged_at" '
