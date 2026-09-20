@@ -128,8 +128,7 @@ jobs:
           # THIS is the one that matters, and it stays. actions/checkout would
           # otherwise leave WORKSPACE_RO_TOKEN — which reaches the PRIVATE
           # workspace repo — in .workspace/.git/config, where the review step
-          # can read it: that step runs over untrusted PR content with
-          # unrestricted `Read` and `Bash(gh pr comment:*)`.
+          # can read it: that step runs over untrusted PR content with `Read` and `Grep`.
           #
           # The action's own credential cleanup does NOT cover this: it runs
           # `git config` against the working directory only, so it never touches
@@ -147,8 +146,11 @@ jobs:
       # The replacement PAT is capped at 366 days by the same rule, so this recurs on a
       # timer. `make ci-audit` probes for it across repos; this step makes the single run
       # say so out loud.
+      #
+      # No `if: always()`: the checkout above is continue-on-error, which already lets this run when
+      # only the catalog checkout failed. `always()` would also fire it when the PR checkout itself
+      # failed, and then it would blame an expired token for a failure that is something else.
       - name: Check the conventions catalog arrived
-        if: always()
         run: |
           if [ -n "$(ls -A .workspace/conventions 2>/dev/null)" ] || [ -d conventions ]; then
             echo "Conventions catalog available." >> "$GITHUB_STEP_SUMMARY"
