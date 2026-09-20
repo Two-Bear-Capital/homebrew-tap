@@ -8,9 +8,31 @@ on:
 
 jobs:
   claude:
-    if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    # TRUST GATE — only a repo owner, org member or collaborator can summon @claude.
+    #
+    # Without the author_association check this is a pwn request: `issue_comment` and
+    # `issues` run in the BASE repo's context with full access to org secrets, and
+    # `homebrew-tap` is PUBLIC, so anyone on the internet could open an issue saying
+    # "@claude" and get a Claude Code session holding CLAUDE_CODE_OAUTH_TOKEN with
+    # `pull-requests: write` and `issues: write` — and, once the catalog checkout below
+    # exists, WORKSPACE_RO_TOKEN and the private conventions too. The prompt is the
+    # attacker's comment text.
+    #
+    # Nothing has happened: this job has never executed in any repo. On a public repo
+    # that is luck rather than design.
+    #
+    # claude-code-review.yml does not need this — it is `pull_request`-triggered and
+    # already restricted to same-repo PRs, so a fork cannot reach it.
+    if: >-
+      (
+        github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, '@claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      ) || (
+        github.event_name == 'issues' &&
+        (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30 # interactive bot may implement changes; cap runaway sessions
     permissions:
@@ -35,6 +57,42 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+
+      # Without this, @claude runs with NONE of the shared conventions. Every repo's
+      # CLAUDE.md imports the catalog by relative path (`@../conventions/core.md` and
+      # friends), which resolves only in the workspace layout — so on a bare runner
+      # checkout the imports silently no-op and the session loses Conventional Commits,
+      # the secrets rules, DRY, the testing floor and the data boundaries. Silently, the
+      # same shape as workspace#153.
+      #
+      # claude-code-review.yml solves this by telling Claude in its PROMPT to read
+      # `.workspace/conventions/`. There is no prompt here — the user's @claude comment is
+      # the prompt — so the catalog has to land where CLAUDE.md already looks instead.
+      # See the materialise step below.
+      #
+      # Degrade gracefully: a lapsed token must not fail every @claude invocation.
+      - name: Checkout conventions catalog
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Two-Bear-Capital/tbc-platform-workspace
+          token: ${{ secrets.WORKSPACE_RO_TOKEN }}
+          sparse-checkout: conventions/
+          sparse-checkout-cone-mode: false
+          path: .workspace
+          # WORKSPACE_RO_TOKEN reaches the PRIVATE workspace repo, and actions/checkout
+          # would leave it in .workspace/.git/config where this session — which runs over
+          # user-supplied comment text — could read it. The action's own cleanup only
+          # touches the working directory, never this path. Nothing fetches from this
+          # checkout, so dropping the credential costs nothing.
+          persist-credentials: false
+
+      # Non-trivial logic belongs in a checked-in script, not inline YAML
+      # (conventions/make-hub.md): shellcheck-lintable, bash -n testable, and it reviews as
+      # code. The script explains the path arithmetic and why `.workspace` is deleted.
+      - name: Materialise the catalog where CLAUDE.md imports it
+        if: always()
+        run: ./.github/scripts/materialise-conventions.sh
 
       - name: Run Claude Code
         id: claude
