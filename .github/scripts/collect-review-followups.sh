@@ -18,12 +18,12 @@
 # finding. So this does not ask the author to remember at merge time — which is exactly
 # when the PR is green and they are done.
 #
-# What it collects from a merged PR:
-#   * unresolved threads whose root comment is a bot finding tagged ADVISORY:
-#   * EVERY unresolved bot thread created after mergedAt, whatever its tag — a finding
-#     that arrives after the merge had no chance to gate it, and blocking ones posted
-#     late are the most valuable thing in this whole set (17 findings across 9 PRs in
-#     the 30 days before this existed)
+# What it collects: **every unresolved reviewer thread on the merged PR**, whatever its tier
+# and whenever it was posted. Tier and lateness are annotations in the issue, never admission
+# criteria — see the long note above the selection for the four separate times a predicate
+# silently ate a finding. A thread posted after mergedAt had no chance to gate anything, and a
+# thread tagged BLOCKING that is still open means the review gate was missed; both are called
+# out at the top of the issue rather than filtered.
 #
 # Idempotent: one issue per PR, looked up by title and updated rather than duplicated.
 # Safe to re-run, and safe for the daily sweep to revisit the same PR.
@@ -43,7 +43,7 @@ command -v gh >/dev/null 2>&1 || {
 
 OWNER="${REPO%%/*}"
 NAME="${REPO##*/}"
-LABEL="review-advisory"
+LABEL="review-followup"
 TITLE="review follow-ups from #${PR_NUMBER}"
 
 # Paginated, not first:100. The script promises to carry EVERY unresolved finding, and a
@@ -95,15 +95,24 @@ merged_at=$(jq -r '.mergedAt // empty' <<<"$pr")
 }
 pr_author=$(jq -r '.author.login // empty' <<<"$pr")
 
-# Select the threads worth carrying forward. `late` is computed against mergedAt so a
-# finding that landed after the gate is kept whatever its tier.
+# Carry EVERY unresolved bot thread. Nothing about the decision to keep a finding is
+# allowed to depend on parsing its text.
 #
-# Admission is by author OR by the surfaced marker, and the second clause is load-bearing:
-# surface-suppressed-findings.sh posts its threads with the workflow's GITHUB_TOKEN, so they
-# are authored by `github-actions[bot]` — a login the author test never matches. Selecting on
-# the author alone silently dropped exactly the findings that pair of scripts exists to
-# preserve, which is the whole point of them. Identity is the wrong key here; provenance is
-# the right one, and the marker carries it.
+# That rule is written in blood. This script dropped findings on the floor three times, each
+# time because some predicate had to match before the finding counted:
+#   1. surfaced findings posted as issue comments, which this script does not read at all
+#   2. a transient API failure demoting a thread back to that same unread comment
+#   3. an author-login test that rejected the `github-actions[bot]` threads we post ourselves
+#   4. `test("ADVISORY:")` missing a finding tagged `ADVISORY (dry-and-reuse.md):` — a
+#      parenthetical between the word and the colon, and the finding vanished
+#
+# Every one was the same defect wearing a different hat: a finding reaching a state where
+# nothing carries it. Tier and lateness are still computed, but only to ANNOTATE the issue —
+# never to decide admission. A regex cannot lose a finding it does not gate.
+#
+# Admission is therefore: unresolved, and raised by a reviewer. The marker clause covers the
+# threads surface-suppressed-findings.sh posts under the workflow's GITHUB_TOKEN, which no
+# author test would match.
 findings=$(jq -r --arg merged "$merged_at" '
   [ .reviewThreads.nodes[]
     | select(.isResolved == false)
@@ -120,49 +129,72 @@ findings=$(jq -r --arg merged "$merged_at" '
         url: $c.url,
         body: $c.body,
         late: ($c.createdAt > $merged),
-        advisory: ($c.body | test("ADVISORY:"))
+        # Anchored to the START of a line, optionally behind markdown bold — the convention
+        # is that the tag LEADS the finding. Searching the whole body instead reads the tier
+        # out of incidental prose: "this is a non-blocking nit" or a finding that quotes the
+        # gate would both render as BLOCKING and trip the 🚨 banner. `\b` alone does not save
+        # you, because a hyphen is a word boundary too. The colon is not required, so a
+        # qualifier — `ADVISORY (dry-and-reuse.md):` — still reads correctly.
+        tier: (if ($c.body | test("(^|\n)\\s*(\\*\\*)?BLOCKING\\b")) then "BLOCKING"
+               elif ($c.body | test("(^|\n)\\s*(\\*\\*)?ADVISORY\\b")) then "ADVISORY"
+               else "untagged" end)
       }
-    | select(.advisory or .late)
   ]' <<<"$pr")
 
 count=$(jq 'length' <<<"$findings")
 if [[ "$count" == "0" ]]; then
-	echo "$REPO#$PR_NUMBER: no unresolved advisory or post-merge findings."
+	echo "$REPO#$PR_NUMBER: no unresolved reviewer threads."
 	exit 0
 fi
 
 late_count=$(jq '[.[] | select(.late)] | length' <<<"$findings")
+# Only PRE-merge blocking threads mean the gate was missed. A blocking thread posted
+# after mergedAt never had a chance to gate anything — counting it here would fire the
+# "should not have merged" banner and the "nothing could have gated them" banner at once,
+# about the same thread.
+blocking_count=$(jq '[.[] | select(.tier == "BLOCKING" and (.late | not))] | length' <<<"$findings")
+late_blocking=$(jq '[.[] | select(.tier == "BLOCKING" and .late)] | length' <<<"$findings")
 
 # The label may not exist in this repo yet. `--force` makes creation idempotent, and
 # creating it here keeps the workflow self-contained rather than depending on a separate
 # `make labels` pass having reached every repo first.
 gh label create "$LABEL" --repo "$REPO" \
 	--color "fbca04" \
-	--description "Non-blocking review findings carried over from a merged PR" \
+	--description "Review threads left unresolved when a PR merged" \
 	--force >/dev/null 2>&1 || true
 
 # Built with explicit \n rather than heredocs: $(cat <<EOF) strips trailing newlines, so
 # the sections would run together and the markdown would lose its paragraph breaks.
-body="Review findings from $(jq -r '.url' <<<"$pr") that were still unresolved when it merged."
+body="Reviewer threads left unresolved when $(jq -r '.url' <<<"$pr") merged."
 body+=$'\n\n'
-body+="They did not block the merge, by design — but an unresolved thread on a merged PR is a"
+body+="An unresolved thread on a merged PR is a deleted finding, so every one is tracked here"
 body+=$'\n'
-body+="deleted finding, so they are tracked here instead. Close this issue when they are handled"
+body+="regardless of its tier — nothing decides what to keep by reading the text. Close this"
 body+=$'\n'
-body+="or deliberately declined; if one turns out to matter more than its tag suggested, fix it"
-body+=$'\n'
-body+="and say so."
+body+="issue when they are handled or deliberately declined."
 body+=$'\n\n'
 
-if [[ "$late_count" != "0" ]]; then
-	body+="⚠️ **$late_count of these were posted after the merge**, so nothing could have gated them."
+if [[ "$blocking_count" != "0" ]]; then
+	body+="🚨 **$blocking_count of these are tagged BLOCKING and should not have merged.**"
 	body+=$'\n'
-	body+="Read those first — findings arriving late are how real defects have escaped here before."
+	body+="The review gate in \`conventions/commits-and-releases.md\` requires every blocking thread"
+	body+=$'\n'
+	body+="resolved first. Triage these before anything else, and work out how the gate was missed."
+	body+=$'\n\n'
+fi
+
+if [[ "$late_count" != "0" ]]; then
+	body+="⚠️ **$late_count were posted after the merge**, so nothing could have gated them."
+	if [[ "$late_blocking" != "0" ]]; then
+		body+=" **$late_blocking of those are tagged BLOCKING** — read them first."
+	fi
+	body+=$'\n'
+	body+="Findings arriving late are how real defects have escaped here before."
 	body+=$'\n\n'
 fi
 
 body+=$'---\n\n'
-body+=$(jq -r '.[] | "### `\(.path):\(.line)`\(if .late then "  — *posted after merge*" else "" end)\n\n\(.body)\n\n[thread](\(.url))\n"' <<<"$findings")
+body+=$(jq -r '.[] | "### \(.tier) — `\(.path):\(.line)`\(if .late then "  ·  *posted after merge*" else "" end)\n\n\(.body)\n\n[thread](\(.url))\n"' <<<"$findings")
 
 # Exact-title match over the label-filtered list, NOT `--search`. GitHub's search index is
 # eventually consistent, so an issue this script just filed can be missing from a search a
@@ -174,7 +206,7 @@ existing=$(gh issue list --repo "$REPO" --state open --label "$LABEL" --limit 20
 
 if [[ -n "$existing" ]]; then
 	gh issue edit "$existing" --repo "$REPO" --body "$body" >/dev/null
-	echo "Updated $REPO#$existing with $count finding(s) ($late_count post-merge)."
+	echo "Updated $REPO#$existing with $count thread(s) ($blocking_count blocking, $late_count post-merge)."
 	exit 0
 fi
 
@@ -182,7 +214,7 @@ fi
 # cost us the issue, which is the whole point — so create first, then try to assign.
 number=$(gh issue create --repo "$REPO" --title "$TITLE" --body "$body" --label "$LABEL" \
 	| sed -E 's#.*/issues/##')
-echo "Filed $REPO#$number with $count finding(s) ($late_count post-merge)."
+echo "Filed $REPO#$number with $count thread(s) ($blocking_count blocking, $late_count post-merge)."
 
 if [[ -n "$pr_author" ]]; then
 	gh issue edit "$number" --repo "$REPO" --add-assignee "$pr_author" >/dev/null 2>&1 \
