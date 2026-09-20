@@ -90,13 +90,18 @@ jobs:
       # Non-trivial logic belongs in a checked-in script, not inline YAML
       # (conventions/make-hub.md): shellcheck-lintable, bash -n testable, and it reviews as
       # code. The script explains the path arithmetic and why `.workspace` is deleted.
+      #
+      # No `if: always()`. The step above is continue-on-error, which already lets this one run when
+      # only the catalog checkout failed. `always()` ADDS one case: the mandatory repo checkout
+      # having failed, when this script does not exist yet and the step would die with a
+      # "No such file" that hides the real failure. (The same reasoning applies to the check in
+      # claude-code-review.yml; test-canonical-workflows.py pins both.)
       - name: Materialise the catalog where CLAUDE.md imports it
-        if: always()
         run: ./.github/scripts/materialise-conventions.sh
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@2261fcfc88e7de1b55f179edd588805e12de71f2 # v1
+        uses: anthropics/claude-code-action@9cdae7f0d995e3ba7c33f226087fdf82a59cd520 # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
