@@ -113,7 +113,16 @@ jobs:
         with:
           repository: Two-Bear-Capital/tbc-platform-workspace
           token: ${{ secrets.WORKSPACE_RO_TOKEN }}
-          sparse-checkout: conventions/
+          # conventions/ is what the review reads. The four scripts/ directories are the canonical
+          # sources a sync PR is compared against, and scripts/verify-canonical-sync.sh is the
+          # comparison itself — run from HERE, never from the PR (see the verify step).
+          sparse-checkout: |
+            conventions/
+            scripts/workflows/
+            scripts/workflow-scripts/
+            scripts/copilot/
+            scripts/pr-template/
+            scripts/verify-canonical-sync.sh
           sparse-checkout-cone-mode: false
           path: .workspace
           # THIS is the one that matters, and it stays. actions/checkout would
@@ -156,8 +165,47 @@ jobs:
             echo "Most likely \`WORKSPACE_RO_TOKEN\` has expired. See [workspace#153](https://github.com/Two-Bear-Capital/tbc-platform-workspace/issues/153)."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # A PURE canonical sync is not LLM-reviewed here. The canonical workflows, scripts and templates are
+      # reviewed once, at their source in tbc-platform-workspace, and copied byte-for-byte into every
+      # repo; commits-and-releases.md exempts those sync PRs from a second review, but until this step
+      # nothing enforced it. Over ten days that meant 157 sync PRs across 14 repos, ~9 distinct findings,
+      # and the same canonical defect reported up to 14 times, each in a repo that cannot fix it.
+      #
+      # The exemption is now mechanical: every changed file must be in the canonical set and
+      # byte-identical (blob SHA, and file mode) to its source. The moment anyone edits a copy the PR
+      # stops being a sync and the full review below runs. Any error in the check also runs the full
+      # review — the saving is never worth an unreviewed PR.
+      #
+      # The verifier is run FROM THE WORKSPACE CHECKOUT, not from the PR. What authorizes skipping a
+      # review must not be controlled by the thing being reviewed: a PR that edited a repo-local copy
+      # of the script could make it print verified=true, skipping the review of that very PR, with this
+      # job's write token in hand. For the same reason it is not one of the files that gets synced.
+      # If the checkout is unavailable there is no verdict, and the full review runs.
+      - name: Verify canonical sync
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          POST_COMMENT: "true" # once per head commit; the marker makes a re-run a no-op
+        # A crash must fall back to the review too, not just a missing checkout: a step that FAILS makes
+        # every later step with a plain `if:` skip (an implicit success() gate), so the review would be
+        # skipped by a verifier bug. Only an exact verified=true skips it.
+        run: |
+          if [ -f .workspace/scripts/verify-canonical-sync.sh ]; then
+            bash .workspace/scripts/verify-canonical-sync.sh || {
+              echo "::warning title=Canonical-sync check crashed::running the full review."
+              echo "verified=false" >> "$GITHUB_OUTPUT"
+            }
+          else
+            echo "::warning title=Canonical-sync check unavailable::the workspace checkout is missing — running the full review."
+            echo "verified=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run Claude Code Review
-        uses: anthropics/claude-code-action@2261fcfc88e7de1b55f179edd588805e12de71f2 # v1
+        id: review
+        if: steps.sync.outputs.verified != 'true'
+        uses: anthropics/claude-code-action@9cdae7f0d995e3ba7c33f226087fdf82a59cd520 # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
@@ -280,5 +328,38 @@ jobs:
             cannot tell a stale finding from a live one and re-fixes something
             already fixed. Naming the SHA makes that visible instead of
             guessable.
+          # The tool allowlist is not enough on its own. Before the model starts, claude-code-action's
+          # configureGitAuth (always run; source checked at this pinned SHA) rewrites `origin` to
+          # https://x-access-token:<app token>@github.com/... in .git/config unless
+          # ALLOWED_NON_WRITE_USERS is set, and this step runs over untrusted PR content. Verified with a
+          # planted fake credential: with no deny rule Read and Grep both return it; with the rule below
+          # both are denied and the model does not work around it. Glob still lists names, never
+          # contents. /proc/self/environ is the other place the token lives on a Linux runner (the
+          # absolute-path `//` rule syntax was verified against /etc/hosts; /proc itself only exists on
+          # the runner). scheduled-review.yml carries the same rule for the same reason.
+          #
+          # There is deliberately NO `Bash(gh pr comment:*)` here (it used to be). A Bash prefix rule
+          # is a read channel the Read deny cannot see whenever the command takes a file path:
+          # `gh pr comment --body-file .git/config` matches the prefix and posts the file. The engine
+          # does deny `$(cat ...)`, backticks and `;`-chaining (tested, all three), but a path flag is
+          # not a shell feature. The comment isn't needed: the review's summary is the action's own
+          # tracking comment (track_progress above) and findings go through the inline-comment tool.
+          # `gh pr view` and `gh pr diff` take a PR number, not a path.
           claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*)"
+            --disallowedTools "Read(./.git/**),Read(//proc/**)"
+
+      # claude-code-action refuses to run — quietly, with only a ::warning:: — when this workflow's file
+      # differs from the default branch's copy ("Workflow validation failed"): a GitHub App guard
+      # against a PR rewriting the workflow that reviews it. The job still goes green, so a PR that
+      # edits this workflow would show a passed review that never happened. `execution_file` is only
+      # set when the model actually ran, so its absence is the signal.
+      - name: Say so if the review did not run
+        if: always() && steps.sync.outputs.verified != 'true' && steps.review.outputs.execution_file == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "::warning title=No automated review ran::The Claude review did not complete on this PR — it is NOT reviewed. If this PR edits claude-code-review.yml, the action skips itself by design."
+          gh pr comment "$PR_NUMBER" --body "**The automated review did not run on this PR** (${HEAD_SHA}), so this is not a passed review. The Claude review skips itself when a PR edits the review workflow (a guard against a PR rewriting its own reviewer) and can fail for other reasons; check the run. This PR needs a human review."
