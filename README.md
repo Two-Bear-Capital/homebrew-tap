@@ -2,7 +2,7 @@
 
 ![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040)
 ![CLI](https://img.shields.io/badge/distributes-tbc%20CLI-1d76db)
-![status](https://img.shields.io/badge/access-internal-orange)
+![status](https://img.shields.io/badge/access-public%20tap%2C%20sign--in%20to%20use-orange)
 
 Homebrew tap that distributes **`tbc`**, the Two Bear Capital platform CLI.
 
