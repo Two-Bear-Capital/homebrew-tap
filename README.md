@@ -6,8 +6,9 @@
 
 Homebrew tap that distributes **`tbc`**, the Two Bear Capital platform CLI.
 
-> **Internal only.** Requires a `twobearcapital.com` account; external access is
-> rejected.
+> **Public tap, internal tool.** The tap and its binaries are public, so installing
+> needs no GitHub token. Using `tbc` requires signing in with a `twobearcapital.com`
+> account; `tbc-core` is the auth boundary and rejects anyone else.
 
 ## Part of the Two Bear Capital platform
 
@@ -18,18 +19,20 @@ process (GoReleaser) publishes the binaries and updates the cask here; users
 
 ```mermaid
 flowchart LR
-    Platform[tbc-platform release] -->|publishes| Tap[homebrew-tap]
-    Tap -->|brew install| Dev[developer machines]
+    Platform["tbc-platform release<br/>GoReleaser"] -->|"cask + signed binaries as tap Releases"| Tap[homebrew-tap]
+    Tap -->|brew install| Dev["tbc CLI<br/>macOS / Linux"]
+    Dev -->|"Google sign-in"| Core[tbc-core]
 ```
 
 ## What it does
 
-Holds the Homebrew **cask** definition (`Casks/tbc.rb`) pointing at released
-`tbc` CLI artifacts. No application code.
+Holds the Homebrew **cask** definition (`Casks/tbc.rb`), and hosts the released
+`tbc` CLI binaries as this repo's own GitHub Releases, which the cask downloads.
+No application code.
 
 ## Quick start
 
-Requires [Homebrew](https://brew.sh) on macOS:
+Requires [Homebrew](https://brew.sh) on macOS or Linux:
 
 ```sh
 brew install two-bear-capital/tap/tbc
