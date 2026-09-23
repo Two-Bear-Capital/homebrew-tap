@@ -6,9 +6,11 @@
 
 Homebrew tap that distributes **`tbc`**, the Two Bear Capital platform CLI.
 
-> **Public tap, internal tool.** The tap and its binaries are public, so installing
-> needs no GitHub token. Using `tbc` requires signing in with a `twobearcapital.com`
-> account; `tbc-core` is the auth boundary and rejects anyone else.
+> **Public tap, private tool.** This tap has to be public so `brew install` needs no
+> GitHub token, and it hosts the signed release binaries. The `tbc` source
+> (`tbc-platform`) is private, and the CLI is usable only after signing in with a
+> `twobearcapital.com` account — `tbc-core` is the auth boundary and rejects anyone
+> else.
 
 ## Part of the Two Bear Capital platform
 
