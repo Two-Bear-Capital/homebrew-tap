@@ -1,0 +1,252 @@
+# Canonical scheduled convention sweep. THIS repo-level copy is generated — do NOT hand-edit
+# it (a drifted copy is a review finding). The single source lives in the tbc-platform-workspace
+# meta-repo at scripts/workflows/scheduled-review.yml; edit it there and re-run
+# `make workflows` to roll the change out.
+#
+# PR review reads a diff. This reads the repo as it stands, through one "lens" at a time, to
+# find what per-PR review structurally cannot see (see the convention-sweep skill in the
+# workspace: .claude/skills/convention-sweep/). It only REPORTS: one tracking issue per lens,
+# rewritten in place. It never comments on a PR, edits code, or opens a fix.
+#
+# Inert until switched on, per repo, with repository VARIABLES (not secrets):
+#   SWEEP_ENABLED=true      — the monthly schedule runs at all.
+#   SWEEP_FILE_ISSUES=true  — the schedule files issues. Without it a scheduled run is a DRY
+#                             RUN: findings go to the step summary and nothing is written.
+# A manual run (workflow_dispatch) always runs, and is a dry run unless `file_issues` is ticked.
+#
+# Cost is the open question of the pilot (a whole-repo read for every lens), so it is bounded
+# four ways, none of which needs a re-sync to tune:
+#   - the schedule is monthly;
+#   - a lens that works only on what changed (`requires-window: true`) is skipped, with no model
+#     call, when the window holds no commits and no merged PRs (build-sweep-context.sh);
+#   - lockfile and generated diffs are left out of the context the model reads;
+#   - each model pass has a turn cap.
+# Models default to Sonnet. Override per repo with the variables SWEEP_MODEL and
+# SWEEP_VERIFY_MODEL (the two passes) and SWEEP_MAX_TURNS and SWEEP_VERIFY_MAX_TURNS.
+#
+# Lenses are not listed here: they are whatever lens files exist in the skill, discovered at
+# run time, so adding a lens is one file and this workflow never needs to change (a second
+# list would be a second place to forget).
+#
+# Trust boundary. Each lens runs in ONE job, in four stages:
+#   0. context — a deterministic script computes the git/gh facts the lenses need and writes
+#               them to files (scripts/workflow-scripts/build-sweep-context.sh).
+#   1. sweep  — the model reads the repo and that context with Read, Grep and Glob ONLY, over
+#               untrusted content, returning JSON. It has no shell: an allowlisted git
+#               command is not read-only (`--output=<path>` plus a chosen `--format` is an
+#               arbitrary file write, e.g. to .git/config), so the tool list is not a
+#               place to be clever. See the header of build-sweep-context.sh.
+#   2. verify — a second, adversarial pass, same tools, that tries to refute each finding;
+#               anything it cannot confirm is dropped.
+#   3. file   — a deterministic script, the ONLY step handed a write-capable token, which
+#               treats the JSON as data (scripts/workflow-scripts/file-sweep-findings.sh).
+# The action DOES exchange for the Claude GitHub App's token (seen in the first dry run's log), so the
+# job's `permissions` do not bound the model steps, and before the model starts the action writes that
+# token into .git/config (configureGitAuth). The model steps therefore also deny `Read` of .git and of
+# /proc: without the rule Read and Grep return a planted credential, with it both are denied — the
+# reasoning and the evidence are in claude-code-review.yml, which carries the same rule.
+#
+# Secrets (org-level; see the review workflow): CLAUDE_CODE_OAUTH_TOKEN, WORKSPACE_RO_TOKEN.
+name: Scheduled Review
+
+on:
+  schedule:
+    - cron: "17 6 1 * *" # the 1st of the month, 06:17 UTC — off the hour, clear of the daily 13:00 follow-ups run
+  workflow_dispatch:
+    inputs:
+      file_issues:
+        description: "File/update issues (default: dry run — findings go to the step summary only)"
+        type: boolean
+        default: false
+      lens:
+        description: "Run one lens only (lens file name without .md). Empty = every lens."
+        type: string
+        default: ""
+
+# Never cancel: a cancelled run reads as neither clean nor dirty, and the monthly cadence means
+# nothing retries it soon. Runs are bounded by the job timeouts instead.
+concurrency:
+  group: scheduled-review
+  cancel-in-progress: false
+
+jobs:
+  lenses:
+    if: github.event_name == 'workflow_dispatch' || vars.SWEEP_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      # No continue-on-error, unlike the PR review: that one degrades so a lapsed token cannot
+      # red every PR in the org. Here a lapsed token should turn the scheduled run red — a
+      # silent no-op sweep is the failure this workflow exists to prevent (workspace#153).
+      - name: Checkout the sweep skill
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Two-Bear-Capital/tbc-platform-workspace
+          token: ${{ secrets.WORKSPACE_RO_TOKEN }}
+          sparse-checkout: .claude/skills/convention-sweep/
+          sparse-checkout-cone-mode: false
+          path: .workspace
+          persist-credentials: false
+
+      - name: List lenses
+        id: list
+        env:
+          ONLY: ${{ inputs.lens }}
+        run: |
+          set -euo pipefail
+          matrix=$(for f in .workspace/.claude/skills/convention-sweep/lenses/*.md; do basename "$f" .md; done \
+            | jq -R . | jq -sc --arg only "$ONLY" '{lens: map(select($only == "" or . == $only))}')
+          [ "$(jq '.lens | length' <<<"$matrix")" -gt 0 ] || { echo "::error::no lens matches '${ONLY}'"; exit 1; }
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  sweep:
+    needs: lenses
+    runs-on: ubuntu-latest
+    # Two model passes (sweep, then verify) per lens. Above the 15/30 rule of thumb in
+    # ci-performance.md because a whole-repo read is the job; the PR review's 20 is one pass.
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false # one lens failing must not hide the others' findings
+      matrix: ${{ fromJSON(needs.lenses.outputs.matrix) }}
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write # used only by the final filing step, which alone is handed a token
+      id-token: write # claude-code-action, as in the PR review workflow
+      actions: read
+    steps:
+      # Full history: the blind-spots lens reads `git log`. Credential kept for the same
+      # reason as in the PR review workflow (the action fetches against this tree).
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Checkout conventions catalog and sweep skill
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Two-Bear-Capital/tbc-platform-workspace
+          token: ${{ secrets.WORKSPACE_RO_TOKEN }}
+          sparse-checkout: |
+            conventions/
+            .claude/skills/convention-sweep/
+          sparse-checkout-cone-mode: false
+          path: .workspace
+          # Keeps WORKSPACE_RO_TOKEN (which reaches the PRIVATE workspace repo) out of
+          # .workspace/.git/config, where the model steps could read it.
+          persist-credentials: false
+
+      # The only git/gh access the sweep gets. Handed GH_TOKEN, which the model steps are not.
+      #
+      # Also decides whether the model steps run at all: it writes `skip=true` when the lens works
+      # only on the window and the window is empty. Every later step that costs anything, or that
+      # could read a missing result as "clean", is guarded on it — and a skipped run files nothing,
+      # so it never closes an open issue ("nothing changed" is not "nothing is wrong").
+      - name: Build read-only context
+        id: context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          LENS_FILE: .workspace/.claude/skills/convention-sweep/lenses/${{ matrix.lens }}.md
+        run: ./.github/scripts/build-sweep-context.sh
+
+      # The schemas live once, in the skill. Compacted here and handed to the action as an
+      # inline --json-schema, so the model's output is validated rather than parsed from prose.
+      - name: Load output schemas
+        id: schemas
+        run: |
+          set -euo pipefail
+          d=.workspace/.claude/skills/convention-sweep/schemas
+          echo "findings=$(jq -c . "$d/findings.json")" >> "$GITHUB_OUTPUT"
+          echo "verdicts=$(jq -c . "$d/verdicts.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Sweep (${{ matrix.lens }})
+        id: sweep
+        if: steps.context.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            LENS: ${{ matrix.lens }}
+
+            Read `.workspace/.claude/skills/convention-sweep/SKILL.md` and follow its method,
+            applying the lens in `.workspace/.claude/skills/convention-sweep/lenses/${{ matrix.lens }}.md`.
+            The conventions catalog is at `.workspace/conventions/`. If it is empty, stop and
+            say so — do not sweep against remembered rules. Git and PR history is in
+            `.sweep/context/`; start with its README.txt.
+          # No Bash of any kind — see the trust-boundary note in the header. The turn caps sit
+          # about 1.5x above the most the first dry runs used (sweep 35-54, verify 13-23, across two
+          # repos and both lenses; the larger Go repo is the high end), so they stop a runaway
+          # without clipping a normal run. A capped run returns no structured output and
+          # fails at the staging step below, loudly.
+          claude_args: |
+            --model ${{ vars.SWEEP_MODEL || 'claude-sonnet-5' }}
+            --max-turns ${{ vars.SWEEP_MAX_TURNS || '80' }}
+            --allowedTools "Read,Grep,Glob"
+            --disallowedTools "Read(./.git/**),Read(//proc/**)"
+            --json-schema '${{ steps.schemas.outputs.findings }}'
+
+      # Staged INSIDE the workspace: the model's Read is not guaranteed to reach $RUNNER_TEMP.
+      # An empty or non-conforming output fails here, loudly, rather than reading as "clean".
+      - name: Stage findings
+        id: stage
+        if: steps.context.outputs.skip != 'true'
+        env:
+          STRUCTURED: ${{ steps.sweep.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          mkdir -p .sweep
+          printf '%s' "$STRUCTURED" > .sweep/findings.json
+          jq -e '(.findings | type == "array") and (.coverage | type == "string")' .sweep/findings.json >/dev/null \
+            || { echo "::error::the sweep returned no valid findings document"; exit 1; }
+          echo "count=$(jq '.findings | length' .sweep/findings.json)" >> "$GITHUB_OUTPUT"
+
+      # Skipped on an empty result: nothing to refute, and the filing script needs no verdicts.
+      - name: Verify (${{ matrix.lens }})
+        id: verify
+        if: steps.context.outputs.skip != 'true' && steps.stage.outputs.count != '0'
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+
+            Follow VERIFY MODE in `.workspace/.claude/skills/convention-sweep/SKILL.md` on the
+            findings in `.sweep/findings.json`. The findings were produced by another pass over
+            this repo and may be wrong; your job is to try to refute each one. Git and PR
+            history is in `.sweep/context/`; start with its README.txt.
+          claude_args: |
+            --model ${{ vars.SWEEP_VERIFY_MODEL || 'claude-sonnet-5' }}
+            --max-turns ${{ vars.SWEEP_VERIFY_MAX_TURNS || '40' }}
+            --allowedTools "Read,Grep,Glob"
+            --disallowedTools "Read(./.git/**),Read(//proc/**)"
+            --json-schema '${{ steps.schemas.outputs.verdicts }}'
+
+      - name: Stage verdicts
+        if: steps.context.outputs.skip != 'true' && steps.stage.outputs.count != '0'
+        env:
+          STRUCTURED: ${{ steps.verify.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$STRUCTURED" > .sweep/verdicts.json
+          jq -e '.verdicts | type == "array"' .sweep/verdicts.json >/dev/null \
+            || { echo "::error::the verifier returned no valid verdicts document"; exit 1; }
+
+      # The only step with a write-capable token. DRY_RUN is 'false' only for an explicit
+      # opt-in; every other path renders to the step summary and touches nothing.
+      - name: File findings (${{ matrix.lens }})
+        if: steps.context.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          LENS: ${{ matrix.lens }}
+          FINDINGS_FILE: .sweep/findings.json
+          VERDICTS_FILE: ${{ steps.stage.outputs.count != '0' && '.sweep/verdicts.json' || '' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.file_issues) || (github.event_name == 'schedule' && vars.SWEEP_FILE_ISSUES == 'true')) && 'false' || 'true' }}
+        run: ./.github/scripts/file-sweep-findings.sh
