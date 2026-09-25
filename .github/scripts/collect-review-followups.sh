@@ -41,6 +41,8 @@ command -v gh >/dev/null 2>&1 || {
 	echo "✗ gh CLI not found" >&2
 	exit 1
 }
+# shellcheck source-path=SCRIPTDIR source=issue-upsert.sh
+source "$(dirname "${BASH_SOURCE[0]}")/issue-upsert.sh"
 
 OWNER="${REPO%%/*}"
 NAME="${REPO##*/}"
@@ -198,27 +200,12 @@ fi
 body+=$'---\n\n'
 body+=$(jq -r '.[] | "### \(.tier) — `\(.path):\(.line)`\(if .late then "  ·  *posted after merge*" else "" end)\n\n\(.body)\n\n[thread](\(.url))\n"' <<<"$findings")
 
-# Exact-title match over the label-filtered list, NOT `--search`. GitHub's search index is
-# eventually consistent, so an issue this script just filed can be missing from a search a
-# minute later — and the daily sweep revisits the same PRs, which would then duplicate it.
-# A plain issue list is read straight from the API and is strongly consistent.
-existing=$(gh issue list --repo "$REPO" --state open --label "$LABEL" --limit 200 \
-	--json number,title \
-	--jq ".[] | select(.title == \"$TITLE\") | .number" 2>/dev/null | head -1)
-
-if [[ -n "$existing" ]]; then
-	gh issue edit "$existing" --repo "$REPO" --body "$body" >/dev/null
-	echo "Updated $REPO#$existing with $count thread(s) ($blocking_count blocking, $late_count post-merge)."
-	exit 0
-fi
-
-# --assignee can fail on its own (an author outside the org, a bot author). That must not
-# cost us the issue, which is the whole point — so create first, then try to assign.
-number=$(gh issue create --repo "$REPO" --title "$TITLE" --body "$body" --label "$LABEL" \
-	| sed -E 's#.*/issues/##')
-echo "Filed $REPO#$number with $count thread(s) ($blocking_count blocking, $late_count post-merge)."
-
-if [[ -n "$pr_author" ]]; then
-	gh issue edit "$number" --repo "$REPO" --add-assignee "$pr_author" >/dev/null 2>&1 \
-		|| echo "  (could not assign $pr_author — left unassigned)"
+# The daily sweep revisits the same PRs, so the lookup must see an issue filed a minute ago —
+# issue-upsert.sh explains why that rules out search and a capped list.
+issue_find "$REPO" "$TITLE" "$LABEL"
+issue_write "$REPO" "$ISSUE_NUMBER" "$TITLE" "$body" "$LABEL" "$pr_author"
+if [[ "$ISSUE_CREATED" == true ]]; then
+	echo "Filed $REPO#$ISSUE_NUMBER with $count thread(s) ($blocking_count blocking, $late_count post-merge)."
+else
+	echo "Updated $REPO#$ISSUE_NUMBER with $count thread(s) ($blocking_count blocking, $late_count post-merge)."
 fi
