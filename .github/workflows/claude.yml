@@ -23,6 +23,16 @@ jobs:
     #
     # claude-code-review.yml does not need this — it is `pull_request`-triggered and
     # already restricted to same-repo PRs, so a fork cannot reach it.
+    #
+    # ACCEPTED RISK (workspace#190): this gate is the guard, and deliberately the only one.
+    # The action writes its app token into .git/config, and this job keeps unrestricted
+    # Bash because it commits and pushes — so the `Read(./.git/**)` deny that closed this
+    # for the review workflows (#179) cannot help here: `cat .git/config`, `git remote -v`
+    # and `git config --get remote.origin.url` all print it, and the job needs `git`. What
+    # remains is prompt injection via content a trusted member asks it to read. The token is
+    # a short-lived app token; whether the action revokes it at job end is NOT verified for
+    # this workflow. The real fix is keeping the token out of .git/config (#224), not a tool
+    # allowlist.
     if: >-
       (
         github.event_name == 'issue_comment' &&
