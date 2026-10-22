@@ -15,7 +15,7 @@ jobs:
     # `homebrew-tap` is PUBLIC, so anyone on the internet could open an issue saying
     # "@claude" and get a Claude Code session holding CLAUDE_CODE_OAUTH_TOKEN with
     # `pull-requests: write` and `issues: write` — and, once the catalog checkout below
-    # exists, WORKSPACE_RO_TOKEN and the private conventions too. The prompt is the
+    # exists, the workspace-reader App's key and the private conventions too. The prompt is the
     # attacker's comment text.
     #
     # Nothing has happened: this job has never executed in any repo. On a public repo
@@ -80,17 +80,29 @@ jobs:
       # the prompt — so the catalog has to land where CLAUDE.md already looks instead.
       # See the materialise step below.
       #
-      # Degrade gracefully: a lapsed token must not fail every @claude invocation.
+      # Degrade gracefully: a token that can't be minted must not fail every @claude invocation.
+      # Minted and revoked as in claude-code-review.yml, which says why it is an App.
+      - name: Mint the conventions-catalog token
+        id: catalog-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_WORKSPACE_READER_CLIENT_ID }}
+          private-key: ${{ secrets.GH_WORKSPACE_READER_SIGNING_KEY }}
+          owner: Two-Bear-Capital
+          repositories: tbc-platform-workspace
+          permission-contents: read
+
       - name: Checkout conventions catalog
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Two-Bear-Capital/tbc-platform-workspace
-          token: ${{ secrets.WORKSPACE_RO_TOKEN }}
+          token: ${{ steps.catalog-token.outputs.token }}
           sparse-checkout: conventions/
           sparse-checkout-cone-mode: false
           path: .workspace
-          # WORKSPACE_RO_TOKEN reaches the PRIVATE workspace repo, and actions/checkout
+          # The catalog token reaches the PRIVATE workspace repo, and actions/checkout
           # would leave it in .workspace/.git/config where this session — which runs over
           # user-supplied comment text — could read it. The action's own cleanup only
           # touches the working directory, never this path. Nothing fetches from this
@@ -111,7 +123,7 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9 # v1
+        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
