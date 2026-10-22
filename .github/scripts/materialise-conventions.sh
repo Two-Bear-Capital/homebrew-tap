@@ -17,7 +17,7 @@
 #
 # Two properties worth keeping:
 #
-#   * It exits 0 when the catalog is absent. A lapsed WORKSPACE_RO_TOKEN must not fail
+#   * It exits 0 when the catalog is absent. A catalog token that can't be minted must not fail
 #     every @claude invocation — but the degradation is LOUD (a ::warning:: and a step
 #     summary), because for a month nobody noticed the same failure in the review workflow
 #     (tbc-platform-workspace#153).
@@ -41,7 +41,7 @@ DEST="../conventions"
 trap 'rm -rf .workspace' EXIT
 
 if [ -z "$(ls -A "$SRC" 2>/dev/null)" ]; then
-	echo "::warning title=Degraded session::Conventions catalog unavailable — @claude is running without the shared rules. Check WORKSPACE_RO_TOKEN (see tbc-platform-workspace#153)."
+	echo "::warning title=Degraded session::Conventions catalog unavailable — @claude is running without the shared rules. Check the 'Mint the conventions-catalog token' step (see tbc-platform-workspace#326)."
 	{
 		echo "### ⚠️ Degraded @claude session"
 		echo
@@ -49,7 +49,7 @@ if [ -z "$(ls -A "$SRC" 2>/dev/null)" ]; then
 		echo "imports of \`../conventions/*\` resolved to nothing. Claude ran without the shared"
 		echo "rules — Conventional Commits, secrets handling, DRY, the testing floor."
 		echo
-		echo "Most likely \`WORKSPACE_RO_TOKEN\` has expired. See [workspace#153](https://github.com/Two-Bear-Capital/tbc-platform-workspace/issues/153)."
+		echo "Most likely the workspace-reader GitHub App couldn't mint a token. See [workspace#326](https://github.com/Two-Bear-Capital/tbc-platform-workspace/issues/326)."
 	} >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
 	exit 0
 fi
