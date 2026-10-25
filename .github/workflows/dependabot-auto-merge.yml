@@ -9,12 +9,12 @@
 # every github-actions update regardless of semver (Action version bumps are
 # SHA-pinned and CI-gated, so a breaking one fails CI and never merges — they're
 # treated as ordinary auto-merge candidates). GitHub completes the merge only
-# after required status checks pass — the CI checks enforced by `make protect`
-# (branch protection). A *non-actions* major update gets a comment and waits for
+# after required status checks pass — the CI checks the ci-gate ruleset enforces
+# (`make rulesets`). A *non-actions* major update gets a comment and waits for
 # a human.
 #
-# We do NOT approve the PR: branch protection requires 0 approving reviews on
-# every repo (see `make protect`), so an approval gates nothing — and GitHub
+# We do NOT approve the PR: no ruleset requires an approving review on any repo
+# (see `make rulesets`), so an approval gates nothing — and GitHub
 # Actions is not permitted to approve PRs under the org's default settings
 # ("Allow GitHub Actions to create and approve pull requests" is off), so a
 # `gh pr review --approve` step would fail and abort the job before auto-merge
