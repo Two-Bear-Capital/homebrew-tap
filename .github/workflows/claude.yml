@@ -8,47 +8,29 @@ on:
 
 jobs:
   claude:
-    # TRUST GATE — only a repo owner, org member or collaborator can summon @claude.
+    # TRUST GATE: claude-code-action's own checks, before Claude starts. It refuses an actor
+    # without WRITE access to the repo (permissions.ts: an API lookup of the actor's permission)
+    # and any bot not in `allowed_bots`, which this job leaves empty (actor.ts). Those are the
+    # guard on a public repo like homebrew-tap, where anyone can comment "@claude": the steps
+    # before the action run only this repo's code, never the comment.
     #
-    # Without the author_association check this is a pwn request: `issue_comment` and
-    # `issues` run in the BASE repo's context with full access to org secrets, and
-    # `homebrew-tap` is PUBLIC, so anyone on the internet could open an issue saying
-    # "@claude" and get a Claude Code session holding CLAUDE_CODE_OAUTH_TOKEN with
-    # `pull-requests: write` and `issues: write` — and, once the catalog checkout below
-    # exists, the workspace-reader App's key and the private conventions too. The prompt is the
-    # attacker's comment text.
+    # This `if:` only keeps a runner from starting for nothing. It used to check
+    # author_association too, which duplicated the write check badly: for a member whose org
+    # membership is private, `issues: opened` never carried MEMBER, so opening an issue that
+    # mentions @claude was skipped every time (tbc-platform#738). `sender.type` repeats the
+    # action's bot refusal for the same reason, so an App's event (Core files issues as
+    # `two-bear-core[bot]`, tbc-platform#526) starts nothing at all.
     #
-    # Nothing has happened: this job has never executed in any repo. On a public repo
-    # that is luck rather than design.
-    #
-    # claude-code-review.yml does not need this — it is `pull_request`-triggered and
-    # already restricted to same-repo PRs, so a fork cannot reach it.
-    #
-    # ACCEPTED RISK (workspace#190): this gate is the guard, and deliberately the only one.
-    # This job keeps unrestricted Bash because it commits and pushes, so no tool allowlist
-    # can hide the action's app token from it. #224 moved the token out of .git/config (see
-    # `allowed_non_write_users` below), so `git remote -v` and `cat .git/config` no longer
-    # print it, but the action still exports it as GH_TOKEN for the session (run.ts), where
-    # `env` prints it. What remains is prompt injection via content a trusted member asks it
-    # to read. The token is a short-lived app token; whether the action revokes it at job end
-    # is NOT verified for this workflow.
-    #
-    # No App can summon it either (tbc-platform#526). Core files issues as `two-bear-core[bot]`,
-    # so content an agent wrote must never start a privileged session. `sender` is GitHub's record
-    # of who acted, not text anyone can write. Every bot comment sampled across three repos
-    # (claude[bot], github-actions[bot], dependabot[bot]; 2026-10-29) was author_association NONE,
-    # so this refuses no bot that could summon @claude before; it stops relying on that labelling.
+    # ACCEPTED RISK (workspace#190): the job keeps unrestricted Bash because it commits and
+    # pushes, so the session can read the action's short-lived app token (from .git/config, or
+    # GH_TOKEN in its env). Hiding it from .git/config (#224) only moved it to GH_TOKEN and took
+    # two workarounds, so it was undone. What remains is prompt injection via content a member
+    # asks it to read; who can summon it is the control.
     if: >-
       github.event.sender.type != 'Bot' && (
-        (
-          github.event_name == 'issue_comment' &&
-          contains(github.event.comment.body, '@claude') &&
-          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-        ) || (
-          github.event_name == 'issues' &&
-          (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
-          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
-        )
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'issues' &&
+          (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
       )
     runs-on: ubuntu-latest
     timeout-minutes: 30 # interactive bot may implement changes; cap runaway sessions
@@ -58,12 +40,6 @@ jobs:
       issues: write # @claude posts its reply onto the issue
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
-    # Setting allowed_non_write_users (below) also turns this on by default. At 1 it unsets
-    # GH_TOKEN in every shell Claude runs, so the credential helper hands git an empty password
-    # and pushes fail, and it forces the permission mode to default. Job-level, not on the step:
-    # the action reads it from the env context, where its docs say to set it.
-    env:
-      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "0"
     steps:
       # This checkout KEEPS its persisted credential, deliberately — do NOT add
       # `persist-credentials: false` here as a hardening pass. claude-code-action runs
@@ -73,13 +49,18 @@ jobs:
       # (workspace#147) and disproven by the PR's own failing job.
       #
       # It also buys nothing: the action strips this credential itself once it no longer
-      # needs it (src/github/operations/git-config.ts, replaceCheckoutCredentials). The
-      # credential worth dropping is a SECOND checkout carrying a cross-repo token — see
-      # the .workspace checkout in claude-code-review.yml, which nothing fetches from.
+      # needs it (src/github/operations/git-config.ts, replaceCheckoutCredentials), given the
+      # next step. The credential worth dropping is a SECOND checkout carrying a cross-repo
+      # token — see the .workspace checkout in claude-code-review.yml, which nothing fetches from.
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+
+      # Workaround for anthropics/claude-code-action#1721; the script says why. Without it every
+      # push fails "Write access to repository not granted". Delete when that is fixed.
+      - name: Let the action find the checkout credential
+        run: ./.github/scripts/expose-checkout-credential.sh
 
       # Without this, @claude runs with NONE of the shared conventions. Every repo's
       # CLAUDE.md imports the catalog by relative path (`@../conventions/core.md` and
@@ -139,12 +120,5 @@ jobs:
         uses: anthropics/claude-code-action@8041f1d17e0e7d2f2cfe35002962e9f26237c0bb # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Not a user list. Any non-empty value switches the action's git auth from
-          # https://x-access-token:<token>@... in origin's URL to a credential helper that reads
-          # $GH_TOKEN, so .git/config holds no token (git-config.ts at the pinned SHA, #224).
-          # Its other use, skipping the write-permission check for the listed users, applies
-          # only when `github_token` is passed, which this step never does; and the underscore
-          # makes it an impossible GitHub login, so it can't match an actor even then.
-          allowed_non_write_users: credential_helper_only
           additional_permissions: |
             actions: read
