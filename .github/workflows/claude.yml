@@ -32,15 +32,23 @@ jobs:
     # `env` prints it. What remains is prompt injection via content a trusted member asks it
     # to read. The token is a short-lived app token; whether the action revokes it at job end
     # is NOT verified for this workflow.
+    #
+    # No App can summon it either (tbc-platform#526). Core files issues as `two-bear-core[bot]`,
+    # so content an agent wrote must never start a privileged session. `sender` is GitHub's record
+    # of who acted, not text anyone can write. Every bot comment sampled across three repos
+    # (claude[bot], github-actions[bot], dependabot[bot]; 2026-10-29) was author_association NONE,
+    # so this refuses no bot that could summon @claude before; it stops relying on that labelling.
     if: >-
-      (
-        github.event_name == 'issue_comment' &&
-        contains(github.event.comment.body, '@claude') &&
-        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-      ) || (
-        github.event_name == 'issues' &&
-        (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
-        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
+      github.event.sender.type != 'Bot' && (
+        (
+          github.event_name == 'issue_comment' &&
+          contains(github.event.comment.body, '@claude') &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        ) || (
+          github.event_name == 'issues' &&
+          (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
+        )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 30 # interactive bot may implement changes; cap runaway sessions
