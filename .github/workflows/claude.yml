@@ -25,14 +25,13 @@ jobs:
     # already restricted to same-repo PRs, so a fork cannot reach it.
     #
     # ACCEPTED RISK (workspace#190): this gate is the guard, and deliberately the only one.
-    # The action writes its app token into .git/config, and this job keeps unrestricted
-    # Bash because it commits and pushes — so the `Read(./.git/**)` deny that closed this
-    # for the review workflows (#179) cannot help here: `cat .git/config`, `git remote -v`
-    # and `git config --get remote.origin.url` all print it, and the job needs `git`. What
-    # remains is prompt injection via content a trusted member asks it to read. The token is
-    # a short-lived app token; whether the action revokes it at job end is NOT verified for
-    # this workflow. The real fix is keeping the token out of .git/config (#224), not a tool
-    # allowlist.
+    # This job keeps unrestricted Bash because it commits and pushes, so no tool allowlist
+    # can hide the action's app token from it. #224 moved the token out of .git/config (see
+    # `allowed_non_write_users` below), so `git remote -v` and `cat .git/config` no longer
+    # print it, but the action still exports it as GH_TOKEN for the session (run.ts), where
+    # `env` prints it. What remains is prompt injection via content a trusted member asks it
+    # to read. The token is a short-lived app token; whether the action revokes it at job end
+    # is NOT verified for this workflow.
     if: >-
       (
         github.event_name == 'issue_comment' &&
@@ -51,6 +50,12 @@ jobs:
       issues: write # @claude posts its reply onto the issue
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
+    # Setting allowed_non_write_users (below) also turns this on by default. At 1 it unsets
+    # GH_TOKEN in every shell Claude runs, so the credential helper hands git an empty password
+    # and pushes fail, and it forces the permission mode to default. Job-level, not on the step:
+    # the action reads it from the env context, where its docs say to set it.
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "0"
     steps:
       # This checkout KEEPS its persisted credential, deliberately — do NOT add
       # `persist-credentials: false` here as a hardening pass. claude-code-action runs
@@ -123,8 +128,15 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@16f9f71ab9c490faf367f94dd294897edc25be33 # v1
+        uses: anthropics/claude-code-action@8041f1d17e0e7d2f2cfe35002962e9f26237c0bb # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Not a user list. Any non-empty value switches the action's git auth from
+          # https://x-access-token:<token>@... in origin's URL to a credential helper that reads
+          # $GH_TOKEN, so .git/config holds no token (git-config.ts at the pinned SHA, #224).
+          # Its other use, skipping the write-permission check for the listed users, applies
+          # only when `github_token` is passed, which this step never does; and the underscore
+          # makes it an impossible GitHub login, so it can't match an actor even then.
+          allowed_non_write_users: credential_helper_only
           additional_permissions: |
             actions: read
